@@ -3,7 +3,9 @@ package com.josephcatrambone.imagetrainer;
 import com.josephcatrambone.aij.Matrix;
 import com.josephcatrambone.aij.networks.ConvolutionalNetwork;
 import com.josephcatrambone.aij.networks.MeanFilterNetwork;
+import com.josephcatrambone.aij.networks.NeuralNetwork;
 import com.josephcatrambone.aij.networks.RestrictedBoltzmannMachine;
+import com.josephcatrambone.aij.trainers.BackpropTrainer;
 import com.josephcatrambone.aij.trainers.ContrastiveDivergenceTrainer;
 import com.josephcatrambone.aij.trainers.ConvolutionalTrainer;
 import com.josephcatrambone.aij.utilities.ImageTools;
@@ -39,27 +41,36 @@ public class Main extends Application {
 	@Override
 	public void start(Stage stage) {
 		final String IMAGE_PATH = "./images";
+		final String POSITIVE_EXAMPLE_PATH = "./positive_examples";
+		final String NEGATIVE_EXAMPLE_PATH = "./negative_examples";
 		final String IMAGE_EXTENSION = ".png";
 		final String RBM_0_FILENAME = "rbm0.txt";
 		final String RBM_1_FILENAME = "rbm1.txt";
 		final int IMAGE_LIMIT = 4000;
 		final int IMAGE_WIDTH = 256;
 		final int IMAGE_HEIGHT = 256;
-		final int STEP = 2;
-		final int RBM_SIZE_0 = 4;
-		final int RBM_SIZE_1 = 4;
-		final int RBM_OUTPUT_0 = 20;
-		final int RBM_OUTPUT_1 = 10;
+		final int STEP_1 = 2;
+		final int STEP_3 = 16;
+		final int RBM_SIZE_0 = 8;
+		final int RBM_OUTPUT_0 = 16; // 64 -> 256
+		final int RBM_SIZE_1 = 32;
+		final int RBM_OUTPUT_1 = 4; // 1024 -> 16
+
+		// Calculate some layer sizes.
+		int LAYER1_OUTPUT_W = RBM_OUTPUT_0 * (IMAGE_WIDTH/STEP_1);
+		int LAYER1_OUTPUT_H = RBM_OUTPUT_0 * (IMAGE_HEIGHT/STEP_1);
+		int LAYER3_OUTPUT_W = RBM_OUTPUT_1 * (LAYER1_OUTPUT_W/STEP_3);
+		int LAYER3_OUTPUT_H = RBM_OUTPUT_1 * (LAYER1_OUTPUT_H/STEP_3);
 
 		// Set up our network!
 		// One RBM to detect edges and make gabors.  4x4 -> 20x20.  Another 4x4 -> 10x10
 		// First conv layer goes from image width/height, samples RBM sized chunks, goes to imwidth/steps * rbm output.
 		// Finally, layer4 is a fully connected layer which goes form the (flat) output of layer 3 to an output of two classes.
 		RestrictedBoltzmannMachine layer0 = new RestrictedBoltzmannMachine(RBM_SIZE_0*RBM_SIZE_0, RBM_OUTPUT_0*RBM_OUTPUT_0);
-		ConvolutionalNetwork layer1 = new ConvolutionalNetwork(layer0, IMAGE_WIDTH, IMAGE_HEIGHT, RBM_SIZE_0, RBM_SIZE_0, RBM_OUTPUT_0, RBM_OUTPUT_0, STEP, STEP, ConvolutionalNetwork.EdgeBehavior.ZEROS);
+		ConvolutionalNetwork layer1 = new ConvolutionalNetwork(layer0, IMAGE_WIDTH, IMAGE_HEIGHT, RBM_SIZE_0, RBM_SIZE_0, RBM_OUTPUT_0, RBM_OUTPUT_0, STEP_1, STEP_1, ConvolutionalNetwork.EdgeBehavior.ZEROS);
 		RestrictedBoltzmannMachine layer2 = new RestrictedBoltzmannMachine(RBM_SIZE_1*RBM_SIZE_1, RBM_OUTPUT_1*RBM_OUTPUT_1);
-		ConvolutionalNetwork layer3 = new ConvolutionalNetwork(layer2, (IMAGE_WIDTH/STEP)*RBM_OUTPUT_0, (IMAGE_HEIGHT/STEP)*RBM_OUTPUT_0, RBM_SIZE_1, RBM_SIZE_1, RBM_OUTPUT_1, RBM_OUTPUT_1, STEP, STEP, ConvolutionalNetwork.EdgeBehavior.ZEROS);
-		//NeuralNetwork layer4 = new NeuralNetwork(new int[] {layer3.getNumOutputs(), 100, 2}, new String[] {"tanh", "tanh", "tanh"});
+		ConvolutionalNetwork layer3 = new ConvolutionalNetwork(layer2, LAYER1_OUTPUT_W, LAYER1_OUTPUT_H, RBM_SIZE_1, RBM_SIZE_1, RBM_OUTPUT_1, RBM_OUTPUT_1, STEP_3, STEP_3, ConvolutionalNetwork.EdgeBehavior.ZEROS);
+		NeuralNetwork layer4 = new NeuralNetwork(new int[] {LAYER3_OUTPUT_W*LAYER3_OUTPUT_H, 100, 2}, new String[] {"tanh", "tanh", "tanh"});
 
 		// Try to load existing weights if they already exist.
 		try (BufferedReader fin = new BufferedReader(new FileReader(RBM_0_FILENAME))) {
@@ -93,11 +104,21 @@ public class Main extends Application {
 		// Load our training data.
 		System.out.println("Loading images.");
 		Matrix examples = Matrix.zeros(1, IMAGE_WIDTH * IMAGE_HEIGHT);
+		Matrix positiveExamples = Matrix.zeros(1, IMAGE_WIDTH*IMAGE_HEIGHT);
+		Matrix negativeExamples = Matrix.zeros(1, IMAGE_WIDTH*IMAGE_HEIGHT);
 		try {
 			Files.list(new File(IMAGE_PATH).toPath())
 					.filter(p -> p.getFileName().endsWith(IMAGE_EXTENSION) && !p.getFileName().startsWith("."))
 					.limit(IMAGE_LIMIT)
 					.forEach(p -> examples.appendRow(ImageTools.imageFileToMatrix(p.getFileName().toString(), IMAGE_WIDTH, IMAGE_HEIGHT).reshape_i(1, IMAGE_WIDTH*IMAGE_HEIGHT).getRowArray(0)));
+			Files.list(new File(POSITIVE_EXAMPLE_PATH).toPath())
+					.filter(p -> p.getFileName().endsWith(IMAGE_EXTENSION) && !p.getFileName().startsWith("."))
+					.limit(IMAGE_LIMIT)
+					.forEach(p -> positiveExamples.appendRow(ImageTools.imageFileToMatrix(p.getFileName().toString(), IMAGE_WIDTH, IMAGE_HEIGHT).reshape_i(1, IMAGE_WIDTH*IMAGE_HEIGHT).getRowArray(0)));
+			Files.list(new File(NEGATIVE_EXAMPLE_PATH).toPath())
+					.filter(p -> p.getFileName().endsWith(IMAGE_EXTENSION) && !p.getFileName().startsWith("."))
+					.limit(IMAGE_LIMIT)
+					.forEach(p -> negativeExamples.appendRow(ImageTools.imageFileToMatrix(p.getFileName().toString(), IMAGE_WIDTH, IMAGE_HEIGHT).reshape_i(1, IMAGE_WIDTH*IMAGE_HEIGHT).getRowArray(0)));
 		} catch(IOException ioe) {
 
 		}
@@ -157,8 +178,40 @@ public class Main extends Application {
 			fout.write(NetworkIOTools.matrixToString(layer2.getWeights(0)));
 		} catch (IOException ioe) {}
 
-		System.out.println("Done.");
-		System.exit(0);
+		// Now that we have all the input layers trained, let's try and abstract a representation for out positives.
+		Matrix temp = layer1.predict(positiveExamples);
+		Matrix positiveAbstraction = layer3.predict(temp);
+		temp = layer1.predict(negativeExamples);
+		Matrix negativeAbstraction = layer3.predict(temp);
+
+		// Concatenate our examples.  Positive on top.
+		Matrix allAbstractions = new Matrix(
+				positiveAbstraction.numRows() + negativeAbstraction.numRows(),
+				positiveAbstraction.numColumns()); // pos/negative have same number of columns.
+		allAbstractions.setSubmatrix_i(positiveAbstraction, 0, 0);
+		allAbstractions.setSubmatrix_i(negativeAbstraction, positiveAbstraction.numRows(), 0);
+
+		// Make labels by setting the top part of the matrix to [1, 0] and the bottom to [0, 1]
+		Matrix labels = new Matrix(allAbstractions.numRows(), 2);
+		for(int i=0; i < positiveAbstraction.numRows(); i++) {
+			labels.set(i, 0, 1.0);
+		}
+		for(int i=0; i < negativeAbstraction.numRows(); i++) {
+			labels.set(i+positiveAbstraction.numRows(), 1, 1.0);
+		}
+
+		// TODO: We need a matrix concat function and a shuffle.
+
+		// Train.
+		BackpropTrainer nnTrainer = new BackpropTrainer();
+		nnTrainer.batchSize = 10;
+		nnTrainer.learningRate = 0.1;
+		nnTrainer.maxIterations = 10000;
+		nnTrainer.notificationIncrement = 100;
+
+		nnTrainer.train(layer4, allAbstractions, labels, () -> {
+			System.out.println("NN Trainer Last Error: " + nnTrainer.lastError);
+		});
 
 		// Spawn a separate training thread.
 		Thread trainerThread = new Thread(() -> {});
@@ -188,6 +241,9 @@ public class Main extends Application {
 			timeline.stop();
 			trainerThread.interrupt();
 		});
+
+		System.out.println("Done.");
+		System.exit(0);
 	}
 
 	/*** visualizeRBM
