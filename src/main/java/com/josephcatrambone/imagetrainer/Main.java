@@ -24,9 +24,9 @@ import javafx.stage.Stage;
 import javafx.stage.WindowEvent;
 import javafx.util.Duration;
 
-import java.io.*;
+import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
-import java.util.Scanner;
 import java.util.logging.Logger;
 
 /**
@@ -38,102 +38,18 @@ public class Main extends Application {
 
 	private static final Logger LOGGER = Logger.getLogger(Main.class.getName());
 
-	private boolean saveRBM(String filename, RestrictedBoltzmannMachine rbm) {
-		try (BufferedWriter fout = new BufferedWriter(new FileWriter(filename))) {
-			fout.write("visible_bias \n");
-			fout.write(NetworkIOTools.matrixToString(rbm.getVisibleBias()));
-			fout.write("hidden_bias \n");
-			fout.write(NetworkIOTools.matrixToString(rbm.getHiddenBias()));
-			fout.write("weights \n");
-			fout.write(NetworkIOTools.matrixToString(rbm.getWeights(0)));
-		} catch (IOException ioe) {
-			return false;
-		}
-		return true;
-	}
-
-	private boolean loadRBM(String filename, RestrictedBoltzmannMachine rbm) {
-		try (BufferedReader fin = new BufferedReader(new FileReader(filename))) {
-			Scanner scanner = new Scanner(fin);
-			scanner.nextLine();
-			String vbString = scanner.nextLine();
-			scanner.nextLine();
-			String hbString = scanner.nextLine();
-			scanner.nextLine();
-			String wString = scanner.nextLine();
-			rbm.setVisibleBias(NetworkIOTools.stringToMatrix(vbString));
-			rbm.setHiddenBias(NetworkIOTools.stringToMatrix(hbString));
-			rbm.setWeights(0, NetworkIOTools.stringToMatrix(wString));
-			System.out.println("Loaded layer " + filename);
-		} catch (IOException ioe) {
-			return false;
-		}
-		return true;
-	}
-
-	private boolean saveNN(String filename, NeuralNetwork nn) {
-		try(BufferedWriter fout = new BufferedWriter(new FileWriter(filename))) {
-			fout.write(nn.getNumLayers() + " ");
-			for(int i=0; i < nn.getNumLayers(); i++) {
-				fout.write(nn.getBiases(i).numColumns() + " ");
-			}
-			fout.write("\n");
-			for(int i=0; i < nn.getNumLayers(); i++) {
-				fout.write(NetworkIOTools.matrixToString(nn.getBiases(i)));
-			}
-			for(int i=0; i < nn.getNumLayers()-1; i++) { // Note the -1
-				fout.write(NetworkIOTools.matrixToString(nn.getWeights(i)));
-			}
-		} catch (IOException ioe) {
-			return false;
-		}
-		return true;
-	}
-
-	// Can't use the 'pass in NN' trick here.
-	private NeuralNetwork loadNN(String filename) {
-		try(BufferedReader fin = new BufferedReader(new FileReader(filename))) {
-			Scanner scanner = new Scanner(fin);
-			int numLayers = scanner.nextInt();
-			int[] layerSizes = new int[numLayers];
-			String[] activationTypes = new String[numLayers]; // Hack.
-			for(int i=0; i < numLayers; i++) {
-				layerSizes[i] = scanner.nextInt();
-				activationTypes[i] = "tanh";
-			}
-			NeuralNetwork nn = new NeuralNetwork(layerSizes, activationTypes);
-			for(int i=0; i < numLayers; i++) {
-				nn.setBiases(i, NetworkIOTools.stringToMatrix(scanner.nextLine()));
-			}
-			for(int i=0; i < numLayers-1; i++) {
-				nn.setWeights(i, NetworkIOTools.stringToMatrix(scanner.nextLine()));
-			}
-			return nn;
-		} catch(IOException ioe) {
-			return null;
-		}
-	}
-
 	private Network buildNetwork() {
 		final String IMAGE_PATH = "./images";
 		final String POSITIVE_EXAMPLE_PATH = "./positive_examples";
 		final String NEGATIVE_EXAMPLE_PATH = "./negative_examples";
 		final String IMAGE_EXTENSION = ".png";
-		final String RBM_0_FILENAME = "rbm0.txt";
-		final String RBM_1_FILENAME = "rbm1.txt";
-		final String RBM_2_FILENAME = "rbm2.txt";
-		final String NN_FILENAME = "nn.txt";
 		final String FINAL_NETWORK_FILENAME = "dn.dat";
 		final int IMAGE_LIMIT = 4000;
-		final int STEP_1 = 4;
-		final int STEP_3 = 16;
-		final int STEP_5 = 16;
-		final int RBM_SIZE_0 = 4;
-		final int RBM_OUTPUT_0 = 16; // 64 -> 256
-		final int RBM_SIZE_1 = 32;
-		final int RBM_OUTPUT_1 = 4; // 1024 -> 16
-		final int RBM_SIZE_2 = 32;
-		final int RBM_OUTPUT_2 = 4; // 1024 -> 16
+		final int STEP_0 = 1;
+		final int STEP_1 = 16;
+		final int STEP_2 = 16;
+		final int RBM_INPUT = 4;
+		final int RBM_OUTPUT = 16; // 16 -> 256
 
 		// If we already trained our network, just load it and return.
 		Network trainedNetwork = NetworkIOTools.loadNetworkFromDisk(FINAL_NETWORK_FILENAME);
@@ -144,38 +60,43 @@ public class Main extends Application {
 		// Set up our network!
 		// One RBM to detect edges and make gabors.  4x4 -> 20x20.  Another 4x4 -> 10x10
 		// First conv layer goes from image width/height, samples RBM sized chunks, goes to imwidth/steps * rbm output.
-		// Finally, layer4 is a fully connected layer which goes form the (flat) output of layer 3 to an output of two classes.
-		final RestrictedBoltzmannMachine layer0 = new RestrictedBoltzmannMachine(RBM_SIZE_0*RBM_SIZE_0, RBM_OUTPUT_0*RBM_OUTPUT_0);
-		final ConvolutionalNetwork layer1 = new ConvolutionalNetwork(layer0,
+		// Finally, nn is a fully connected layer which goes form the (flat) output of layer 3 to an output of two classes.
+		final RestrictedBoltzmannMachine rbm0 = new RestrictedBoltzmannMachine(RBM_INPUT*RBM_INPUT, RBM_OUTPUT*RBM_OUTPUT);
+		final ConvolutionalNetwork conv0 = new ConvolutionalNetwork(rbm0,
 				IMAGE_WIDTH, IMAGE_HEIGHT,
-				RBM_SIZE_0, RBM_SIZE_0,
-				RBM_OUTPUT_0, RBM_OUTPUT_0,
+				RBM_INPUT, RBM_INPUT,
+				RBM_OUTPUT, RBM_OUTPUT,
+				STEP_0, STEP_0,
+				ConvolutionalNetwork.EdgeBehavior.ZEROS);
+		final MaxPoolingNetwork mp0 = new MaxPoolingNetwork(RBM_OUTPUT*RBM_OUTPUT*4);
+		final ConvolutionalNetwork conv1 = new ConvolutionalNetwork(mp0,
+				conv0.getOutputWidth(), conv0.getOutputHeight(),
+				RBM_OUTPUT*2, RBM_OUTPUT*2,
+				1, 1,
+				RBM_OUTPUT, RBM_OUTPUT, // Since each step maxpools two RBM outputs, step sideways this much.
+				ConvolutionalNetwork.EdgeBehavior.ZEROS);
+		final RestrictedBoltzmannMachine rbm1 = new RestrictedBoltzmannMachine(RBM_INPUT*RBM_INPUT, RBM_OUTPUT*RBM_OUTPUT);
+		final ConvolutionalNetwork conv2 = new ConvolutionalNetwork(rbm1,
+				conv1.getOutputWidth(), conv1.getOutputHeight(),
+				RBM_INPUT,	RBM_INPUT,
+				RBM_OUTPUT, RBM_OUTPUT,
+				STEP_2, STEP_2,
+				ConvolutionalNetwork.EdgeBehavior.ZEROS);
+		final MaxPoolingNetwork mp1 = new MaxPoolingNetwork(RBM_OUTPUT*RBM_OUTPUT*4);
+		final ConvolutionalNetwork conv3 = new ConvolutionalNetwork(mp1,
+				conv2.getOutputWidth(), conv2.getOutputHeight(),
+				RBM_OUTPUT*2, RBM_OUTPUT*2,
+				1, 1,
+				RBM_OUTPUT, RBM_OUTPUT,
+				ConvolutionalNetwork.EdgeBehavior.ZEROS);
+		final RestrictedBoltzmannMachine rbm2 = new RestrictedBoltzmannMachine(RBM_INPUT*RBM_INPUT, RBM_OUTPUT*RBM_OUTPUT);
+		final ConvolutionalNetwork conv4 = new ConvolutionalNetwork(rbm2,
+				conv3.getOutputWidth(), conv3.getOutputHeight(),
+				RBM_INPUT,	RBM_INPUT,
+				RBM_OUTPUT, RBM_OUTPUT,
 				STEP_1, STEP_1,
 				ConvolutionalNetwork.EdgeBehavior.ZEROS);
-		final RestrictedBoltzmannMachine layer2 = new RestrictedBoltzmannMachine(RBM_SIZE_1*RBM_SIZE_1, RBM_OUTPUT_1*RBM_OUTPUT_1);
-		final ConvolutionalNetwork layer3 = new ConvolutionalNetwork(layer2,
-				layer1.getOutputWidth(), layer1.getOutputHeight(),
-				RBM_SIZE_1,	RBM_SIZE_1,
-				RBM_OUTPUT_1, RBM_OUTPUT_1,
-				STEP_3, STEP_3,
-				ConvolutionalNetwork.EdgeBehavior.ZEROS);
-		final RestrictedBoltzmannMachine layer4 = new RestrictedBoltzmannMachine(RBM_SIZE_2*RBM_SIZE_2, RBM_OUTPUT_2*RBM_OUTPUT_2);
-		final ConvolutionalNetwork layer5 = new ConvolutionalNetwork(layer2,
-				layer3.getOutputWidth(), layer3.getOutputHeight(),
-				RBM_SIZE_2,	RBM_SIZE_2,
-				RBM_OUTPUT_2, RBM_OUTPUT_2,
-				STEP_5, STEP_5,
-				ConvolutionalNetwork.EdgeBehavior.ZEROS);
-		NeuralNetwork tempNN = loadNN(NN_FILENAME);
-		if(tempNN == null) {
-			tempNN = new NeuralNetwork(new int[] {layer5.getNumOutputs(), 100, 2}, new String[] {"tanh", "tanh", "tanh"});
-		}
-		final NeuralNetwork layer6 = tempNN;
-
-		// Try to load existing weights if they already exist.
-		loadRBM(RBM_0_FILENAME, layer0);
-		loadRBM(RBM_1_FILENAME, layer2);
-		loadRBM(RBM_2_FILENAME, layer4);
+		final NeuralNetwork fc = new NeuralNetwork(new int[] {conv4.getNumOutputs(), 100, 2}, new String[] {"tanh", "tanh", "tanh"});
 
 		// Load our training data.
 		System.out.println("Loading images.");
@@ -215,53 +136,50 @@ public class Main extends Application {
 		convTrainer.operatorTrainer = cdTrainer;
 		convTrainer.subwindowsPerExample = 100;
 		convTrainer.examplesPerBatch = 10;
-		convTrainer.maxIterations = 1000;
+		convTrainer.maxIterations = 1; //1000;
 
 		// Train first layer.
 		System.out.println("Examples loaded.  Training layer 1.");
-		convTrainer.train(layer1, examples, null, () -> {
+		convTrainer.train(conv0, examples, null, () -> {
 			System.out.println("Contrastive Divergence Training Error: " + cdTrainer.lastError);
-			System.out.println("RBM Energy: " + layer0.getFreeEnergy());
+			System.out.println("RBM Energy: " + rbm0.getFreeEnergy());
 		});
 
 		// Save first layer.
-		//NetworkIOTools.saveNetworkToDisk(layer0, "layer0.model");
-		saveRBM(RBM_0_FILENAME, layer0);
+		//NetworkIOTools.saveNetworkToDisk(rbm0, "rbm0.model");
 
 		// Abstract the data by one level.
-		Matrix examples2 = layer1.predict(examples);
+		Matrix examples2 = conv1.predict(conv0.predict(examples));
 
 		// Train second layer.
 		System.out.println("Examples loaded.  Training layer 3.");
-		convTrainer.train(layer3, examples2, null, () -> {
+		convTrainer.train(conv2, examples2, null, () -> {
 			System.out.println("Contrastive Divergence Training Error: " + cdTrainer.lastError);
-			System.out.println("RBM Energy: " + layer2.getFreeEnergy());
+			System.out.println("RBM Energy: " + rbm1.getFreeEnergy());
 		});
 
-		// Save results.
-		saveRBM(RBM_1_FILENAME, layer2);
-
 		// Abstract the data by one level.
-		Matrix examples3 = layer3.predict(examples2);
+		Matrix examples3 = conv3.predict(conv2.predict(examples2));
 
 		// Train second layer.
 		System.out.println("Examples loaded.  Training layer 5.");
-		convTrainer.train(layer5, examples3, null, () -> {
+		convTrainer.train(conv4, examples3, null, () -> {
 			System.out.println("Contrastive Divergence Training Error: " + cdTrainer.lastError);
-			System.out.println("RBM Energy: " + layer4.getFreeEnergy());
+			System.out.println("RBM Energy: " + rbm2.getFreeEnergy());
 		});
-
-		// Save results.
-		saveRBM(RBM_2_FILENAME, layer4);
 
 		// Now that we have all the input layers trained, let's try and abstract a representation for out positives.
 		Matrix temp = null;
-		temp = layer1.predict(positiveExamples);
-		temp = layer3.predict(temp);
-		Matrix positiveAbstraction = layer5.predict(temp);
-		temp = layer1.predict(negativeExamples);
-		temp = layer3.predict(temp);
-		Matrix negativeAbstraction = layer5.predict(temp);
+		temp = conv0.predict(positiveExamples);
+		temp = conv1.predict(temp);
+		temp = conv2.predict(temp);
+		temp = conv3.predict(temp);
+		Matrix positiveAbstraction = conv4.predict(temp);
+		temp = conv0.predict(negativeExamples);
+		temp = conv1.predict(temp);
+		temp = conv2.predict(temp);
+		temp = conv3.predict(temp);
+		Matrix negativeAbstraction = conv4.predict(temp);
 
 		// Concatenate our examples.  Positive on top.
 		Matrix allAbstractions = Matrix.concatVertically(positiveAbstraction, negativeAbstraction);
@@ -279,16 +197,17 @@ public class Main extends Application {
 		BackpropTrainer nnTrainer = new BackpropTrainer();
 		nnTrainer.batchSize = 10;
 		nnTrainer.learningRate = 0.1;
-		nnTrainer.maxIterations = 100000;
+		nnTrainer.maxIterations = 1; //100000;
 		nnTrainer.notificationIncrement = 100;
 
-		nnTrainer.train(layer6, allAbstractions, labels, () -> {
+		/*
+		nnTrainer.train(fc, allAbstractions, labels, () -> {
 			System.out.println("NN Trainer Last Error: " + nnTrainer.lastError);
 		});
 
-		saveNN(NN_FILENAME, layer6);
-
-		DeepNetwork dn = new DeepNetwork(layer1, layer3, layer5);
+		DeepNetwork dn = new DeepNetwork(conv0, conv1, conv2, conv3, conv4, fc);
+		*/
+		DeepNetwork dn = new DeepNetwork(conv0, conv1, conv2, conv3, conv4);
 		NetworkIOTools.saveNetworkToDisk(dn, FINAL_NETWORK_FILENAME);
 		return dn;
 	}
