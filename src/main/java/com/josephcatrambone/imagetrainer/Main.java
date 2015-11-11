@@ -14,8 +14,8 @@ import javafx.event.ActionEvent;
 import javafx.event.EventHandler;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
+import javafx.scene.control.Button;
 import javafx.scene.image.Image;
-import javafx.scene.image.ImageView;
 import javafx.scene.image.PixelWriter;
 import javafx.scene.image.WritableImage;
 import javafx.scene.layout.GridPane;
@@ -126,17 +126,17 @@ public class Main extends Application {
 		// Make some trainers.
 		ContrastiveDivergenceTrainer cdTrainer = new ContrastiveDivergenceTrainer();
 		cdTrainer.batchSize = 10;
-		cdTrainer.maxIterations = 10;
+		cdTrainer.maxIterations = 100;
 		cdTrainer.learningRate = 0.1;
 		cdTrainer.gibbsSamples = 1;
-		cdTrainer.notificationIncrement = 9;
+		cdTrainer.notificationIncrement = 10;
 		cdTrainer.regularization = 0.0001;
 
 		ConvolutionalTrainer convTrainer = new ConvolutionalTrainer();
 		convTrainer.operatorTrainer = cdTrainer;
-		convTrainer.subwindowsPerExample = 100;
+		convTrainer.subwindowsPerExample = 1000;
 		convTrainer.examplesPerBatch = 10;
-		convTrainer.maxIterations = 1; //1000;
+		convTrainer.maxIterations = 1000;
 
 		// Train first layer.
 		System.out.println("Examples loaded.  Training layer 1.");
@@ -197,7 +197,7 @@ public class Main extends Application {
 		BackpropTrainer nnTrainer = new BackpropTrainer();
 		nnTrainer.batchSize = 10;
 		nnTrainer.learningRate = 0.1;
-		nnTrainer.maxIterations = 1; //100000;
+		nnTrainer.maxIterations = 100000;
 		nnTrainer.notificationIncrement = 100;
 
 		/*
@@ -216,19 +216,29 @@ public class Main extends Application {
 	public void start(Stage stage) {
 		Network net = buildNetwork();
 
-		// Spawn a separate training thread.
-		Thread trainerThread = new Thread(() -> {});
-		//trainerThread.start();
-
 		// Set up UI
 		stage.setTitle("Aij Test UI");
 		GridPane pane = new GridPane();
 		pane.setAlignment(Pos.CENTER);
 		Scene scene = new Scene(pane, IMAGE_WIDTH, IMAGE_HEIGHT);
-		ImageView exampleView = new ImageView(ImageTools.matrixToFXImage(Matrix.random(IMAGE_WIDTH, IMAGE_HEIGHT), true));
-		pane.add(exampleView, 0, 0);
+		//ImageView exampleView = new ImageView(ImageTools.matrixToFXImage(Matrix.random(IMAGE_WIDTH, IMAGE_HEIGHT), true));
+		Button makeButton = new Button("Make Image");
+		//pane.add(exampleView, 0, 0);
+		pane.add(makeButton, 0, 0);
 		stage.setScene(scene);
 		stage.show();
+
+		// Spawn a separate training thread.
+		Thread makerThread = new Thread(() -> {
+			String filename = "output_"+ System.nanoTime() +".png";
+			Matrix mat = net.reconstruct(Matrix.random(1, net.getNumOutputs()));
+			mat.reshape_i(IMAGE_HEIGHT, IMAGE_WIDTH);
+			mat = mat.transpose();
+			ImageTools.FXImageToDisk(ImageTools.matrixToFXImage(mat, true), filename);
+			System.out.println("Wrote file " + filename);
+		});
+
+		makeButton.setOnAction((ActionEvent ae) -> makerThread.start());
 
 		// Repeated draw.
 		Timeline timeline = new Timeline();
@@ -236,15 +246,14 @@ public class Main extends Application {
 		timeline.getKeyFrames().add(new KeyFrame(Duration.seconds(1.0), new EventHandler<ActionEvent>() {
 			@Override
 			public void handle(ActionEvent event) {
-				Matrix mat = net.reconstruct(Matrix.random(1, net.getNumOutputs()));
-				exampleView.setImage(ImageTools.matrixToFXImage(mat, true));
+
 			}
 		}));
 		timeline.playFromStart();
 
 		stage.setOnCloseRequest((WindowEvent w) -> {
 			timeline.stop();
-			trainerThread.interrupt();
+			makerThread.interrupt();
 		});
 
 		System.out.println("Done.");
