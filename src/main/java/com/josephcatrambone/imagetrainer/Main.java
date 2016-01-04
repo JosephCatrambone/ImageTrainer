@@ -2,7 +2,6 @@ package com.josephcatrambone.imagetrainer;
 
 import com.josephcatrambone.aij.Matrix;
 import com.josephcatrambone.aij.networks.*;
-import com.josephcatrambone.aij.trainers.BackpropTrainer;
 import com.josephcatrambone.aij.trainers.ContrastiveDivergenceTrainer;
 import com.josephcatrambone.aij.trainers.ConvolutionalTrainer;
 import com.josephcatrambone.aij.trainers.DeepNetworkTrainer;
@@ -34,79 +33,62 @@ import java.util.logging.Logger;
  * Created by Jo on 10/31/2015.
  */
 public class Main extends Application {
-	final int IMAGE_WIDTH = 32;
-	final int IMAGE_HEIGHT = 32;
-
-	final String IMAGE_PATH = "./images";
-	final String POSITIVE_EXAMPLE_PATH = "./positive_examples";
-	final String NEGATIVE_EXAMPLE_PATH = "./negative_examples";
+	final int IMAGE_WIDTH = 96;
+	final int IMAGE_HEIGHT = 96;
+	final String FINAL_NETWORK_FILENAME = "dn.dat";
+	final String IMAGE_PATH = "D:\\tmp\\black_and_white\\";
 	final String IMAGE_EXTENSION = ".png";
 	final int IMAGE_LIMIT = 4000;
 
 	private static final Logger LOGGER = Logger.getLogger(Main.class.getName());
 
 	private DeepNetwork buildNetwork() {
-		final String FINAL_NETWORK_FILENAME = "dn.dat";
-		final int STEP_0 = 1;
-		final int STEP_1 = 16;
-		final int STEP_2 = 16;
-		final int RBM_INPUT = 4;
-		final int RBM_OUTPUT = 16; // 16 -> 256
-
-		// If we already trained our network, just load it and return.
-		Network trainedNetwork = NetworkIOTools.loadNetworkFromDisk(FINAL_NETWORK_FILENAME);
-		if(trainedNetwork != null) {
-			return (DeepNetwork)trainedNetwork;
-		}
-
 		// Set up our network!
-		// One RBM to detect edges and make gabors.  4x4 -> 20x20.  Another 4x4 -> 10x10
+		// One RBM to detect edges and make gabors.
 		// First conv layer goes from image width/height, samples RBM sized chunks, goes to imwidth/steps * rbm output.
 		// Finally, nn is a fully connected layer which goes form the (flat) output of layer 3 to an output of two classes.
-		final RestrictedBoltzmannMachine rbm0 = new RestrictedBoltzmannMachine(RBM_INPUT*RBM_INPUT, RBM_OUTPUT*RBM_OUTPUT);
+		final RestrictedBoltzmannMachine rbm0 = new RestrictedBoltzmannMachine(
+				4*4,
+				16*16);
 		final ConvolutionalNetwork conv0 = new ConvolutionalNetwork(rbm0,
 				IMAGE_WIDTH, IMAGE_HEIGHT,
-				RBM_INPUT, RBM_INPUT,
-				RBM_OUTPUT, RBM_OUTPUT,
-				STEP_0, STEP_0,
+				4, 4, // Filter 4x4
+				16, 16, // Out -> 256
+				4, 4, // Stride
 				ConvolutionalNetwork.EdgeBehavior.ZEROS);
 
-		final MaxPoolingNetwork mp0 = new MaxPoolingNetwork(RBM_OUTPUT*RBM_OUTPUT*4);
+		final MaxPoolingNetwork mp0 = new MaxPoolingNetwork(
+				4*4); // Should match filter
 		final ConvolutionalNetwork conv1 = new ConvolutionalNetwork(mp0,
 				conv0.getOutputWidth(), conv0.getOutputHeight(),
-				RBM_OUTPUT*2, RBM_OUTPUT*2,
-				1, 1,
-				RBM_OUTPUT, RBM_OUTPUT, // Since each step maxpools two RBM outputs, step sideways this much.
+				4, 4, // Filter
+				1, 1, // Out (1x1 for mp)
+				4, 4, // Stride
 				ConvolutionalNetwork.EdgeBehavior.ZEROS);
 
-		final RestrictedBoltzmannMachine rbm1 = new RestrictedBoltzmannMachine(RBM_INPUT*RBM_INPUT, RBM_OUTPUT*RBM_OUTPUT);
+		final RestrictedBoltzmannMachine rbm1 = new RestrictedBoltzmannMachine(
+				8*8,
+				16*16);
 		final ConvolutionalNetwork conv2 = new ConvolutionalNetwork(rbm1,
 				conv1.getOutputWidth(), conv1.getOutputHeight(),
-				RBM_INPUT,	RBM_INPUT,
-				RBM_OUTPUT, RBM_OUTPUT,
-				STEP_2, STEP_2,
+				8, 8,
+				16, 16,
+				8, 8,
 				ConvolutionalNetwork.EdgeBehavior.ZEROS);
 
-		final MaxPoolingNetwork mp1 = new MaxPoolingNetwork(RBM_OUTPUT*RBM_OUTPUT*4);
+		final MaxPoolingNetwork mp1 = new MaxPoolingNetwork(
+				32*32);
 		final ConvolutionalNetwork conv3 = new ConvolutionalNetwork(mp1,
 				conv2.getOutputWidth(), conv2.getOutputHeight(),
-				RBM_OUTPUT*2, RBM_OUTPUT*2,
+				32, 32,
 				1, 1,
-				RBM_OUTPUT, RBM_OUTPUT,
+				16, 16,
 				ConvolutionalNetwork.EdgeBehavior.ZEROS);
 
-		final RestrictedBoltzmannMachine rbm2 = new RestrictedBoltzmannMachine(RBM_INPUT*RBM_INPUT, RBM_OUTPUT*RBM_OUTPUT);
-		final ConvolutionalNetwork conv4 = new ConvolutionalNetwork(rbm2,
-				conv3.getOutputWidth(), conv3.getOutputHeight(),
-				RBM_INPUT,	RBM_INPUT,
-				RBM_OUTPUT, RBM_OUTPUT,
-				STEP_1, STEP_1,
-				ConvolutionalNetwork.EdgeBehavior.ZEROS);
+		final NeuralNetwork fc = new NeuralNetwork(new int[] {conv3.getNumOutputs(), 100, 2}, new String[] {"tanh", "tanh", "tanh"});
 
-		final NeuralNetwork fc = new NeuralNetwork(new int[] {conv4.getNumOutputs(), 100, 2}, new String[] {"tanh", "tanh", "tanh"});
-
-		DeepNetwork dn = new DeepNetwork(conv0, conv1, conv2, conv3, conv4);
-		NetworkIOTools.saveNetworkToDisk(dn, FINAL_NETWORK_FILENAME);
+		// Just use the first two for now.
+		DeepNetwork dn = new DeepNetwork(conv0, conv1, conv2, conv3);
 
 		return dn;
 	}
@@ -115,30 +97,46 @@ public class Main extends Application {
 		DeepNetworkTrainer dnt = new DeepNetworkTrainer(net);
 
 		ContrastiveDivergenceTrainer trainer0_0 = new ContrastiveDivergenceTrainer();
+		trainer0_0.batchSize = 10;
+		trainer0_0.earlyStopError = -1;
+		trainer0_0.learningRate = 0.1;
+		trainer0_0.maxIterations = 1001;
+		trainer0_0.notificationIncrement = 1000;
 		ConvolutionalTrainer trainer0_1 = new ConvolutionalTrainer();
 		trainer0_1.operatorTrainer = trainer0_0;
+		trainer0_1.maxIterations = 10000;
 		dnt.setTrainer(0, trainer0_1); // Train layer zero convolution with ct.
 
+		/*
 		dnt.setTrainer(1, null); // No training for maxpool.
 
 		ContrastiveDivergenceTrainer trainer2_0 = new ContrastiveDivergenceTrainer();
+		trainer2_0.batchSize = 10;
+		trainer2_0.earlyStopError = -1;
+		trainer2_0.learningRate = 0.1;
+		trainer2_0.maxIterations = 1001;
+		trainer2_0.notificationIncrement = 1000;
 		ConvolutionalTrainer trainer2_1 = new ConvolutionalTrainer();
-		trainer0_1.operatorTrainer = trainer2_0;
+		trainer2_1.operatorTrainer = trainer2_0;
+		trainer2_1.earlyStopError = -1;
+		trainer2_1.maxIterations = 10000;
 		dnt.setTrainer(2, trainer2_1); // Train layer zero convolution with ct.
 
 		dnt.setTrainer(3, null); // No training for maxpool.
-
-		ContrastiveDivergenceTrainer trainer4_0 = new ContrastiveDivergenceTrainer();
-		ConvolutionalTrainer trainer4_1 = new ConvolutionalTrainer();
-		trainer0_1.operatorTrainer = trainer4_0;
-		dnt.setTrainer(4, trainer4_1); // Train layer zero convolution with ct.
-
+		*/
 		return dnt;
 	}
 
 	@Override
 	public void start(Stage stage) {
-		DeepNetwork net = buildNetwork();
+		// If we already trained our network, just load it and return.
+		Network trainedNetwork = NetworkIOTools.loadNetworkFromDisk(FINAL_NETWORK_FILENAME);
+		DeepNetwork net;
+		if(trainedNetwork != null) {
+			net = (DeepNetwork)trainedNetwork;
+		} else {
+			net = buildNetwork();
+		}
 		DeepNetworkTrainer dnt = buildTrainer(net);
 
 		// Set up UI
@@ -147,30 +145,22 @@ public class Main extends Application {
 		pane.setAlignment(Pos.CENTER);
 		Scene scene = new Scene(pane, IMAGE_WIDTH, IMAGE_HEIGHT);
 		//ImageView exampleView = new ImageView(ImageTools.matrixToFXImage(Matrix.random(IMAGE_WIDTH, IMAGE_HEIGHT), true));
-		Button makeButton = new Button("Make Image");
+		Button makeButton = new Button("Make Image (Hidden -> Visible)");
+		Button exportRBMButton = new Button("Save RBMs");
 		//pane.add(exampleView, 0, 0);
 		pane.add(makeButton, 0, 0);
+		pane.add(exportRBMButton, 0, 1);
 		stage.setScene(scene);
 		stage.show();
 
 		// Load our training data.
 		System.out.println("Loading images.");
 		Matrix examples = Matrix.zeros(1, IMAGE_WIDTH * IMAGE_HEIGHT);
-		Matrix positiveExamples = Matrix.zeros(1, IMAGE_WIDTH*IMAGE_HEIGHT);
-		Matrix negativeExamples = Matrix.zeros(1, IMAGE_WIDTH*IMAGE_HEIGHT);
 		try {
 			Files.list(new File(IMAGE_PATH).toPath())
 					.filter(p -> p.getFileName().endsWith(IMAGE_EXTENSION) && !p.getFileName().startsWith("."))
 					.limit(IMAGE_LIMIT)
 					.forEach(p -> examples.appendRow(ImageTools.imageFileToMatrix(p.getFileName().toString(), IMAGE_WIDTH, IMAGE_HEIGHT).reshape_i(1, IMAGE_WIDTH*IMAGE_HEIGHT).getRowArray(0)));
-			Files.list(new File(POSITIVE_EXAMPLE_PATH).toPath())
-					.filter(p -> p.getFileName().endsWith(IMAGE_EXTENSION) && !p.getFileName().startsWith("."))
-					.limit(IMAGE_LIMIT)
-					.forEach(p -> positiveExamples.appendRow(ImageTools.imageFileToMatrix(p.getFileName().toString(), IMAGE_WIDTH, IMAGE_HEIGHT).reshape_i(1, IMAGE_WIDTH*IMAGE_HEIGHT).getRowArray(0)));
-			Files.list(new File(NEGATIVE_EXAMPLE_PATH).toPath())
-					.filter(p -> p.getFileName().endsWith(IMAGE_EXTENSION) && !p.getFileName().startsWith("."))
-					.limit(IMAGE_LIMIT)
-					.forEach(p -> negativeExamples.appendRow(ImageTools.imageFileToMatrix(p.getFileName().toString(), IMAGE_WIDTH, IMAGE_HEIGHT).reshape_i(1, IMAGE_WIDTH*IMAGE_HEIGHT).getRowArray(0)));
 		} catch(IOException ioe) {
 
 		}
@@ -193,19 +183,32 @@ public class Main extends Application {
 
 		// Spawn a separate training thread.
 		Thread trainerThread = new Thread(() -> {
-
+			Runnable notification = () -> {
+				System.out.println("Trainer notification fired!");
+			};
+			System.out.println("Training deep network in background.");
+			dnt.train(net, examples, null, notification);
+			System.out.println("Done training.  Saving network.");
+			NetworkIOTools.saveNetworkToDisk(net, FINAL_NETWORK_FILENAME);
+			System.out.println("Done with all the things.  Closing thread.");
 		});
+		//trainerThread.start();
 
-		Thread makerThread = new Thread(() -> {
+		Runnable makerThread = () -> {
 			String filename = "output_"+ System.nanoTime() +".png";
 			Matrix mat = net.reconstruct(Matrix.random(1, net.getNumOutputs()));
 			mat.reshape_i(IMAGE_HEIGHT, IMAGE_WIDTH);
 			mat = mat.transpose();
 			ImageTools.FXImageToDisk(ImageTools.matrixToFXImage(mat, true), filename);
 			System.out.println("Wrote file " + filename);
-		});
+		};
+		makeButton.setOnAction((ActionEvent ae) -> makerThread.run());
 
-		makeButton.setOnAction((ActionEvent ae) -> makerThread.start());
+		Runnable exportRMB = () -> {
+			ConvolutionalNetwork cn = (ConvolutionalNetwork)net.getSubnet(0);
+			ImageTools.FXImageToDisk(visualizeRBM((RestrictedBoltzmannMachine)cn.getOperator(), null, true), "rbm0.png");
+		};
+		exportRBMButton.setOnAction((ActionEvent ae) -> exportRMB.run());
 
 		// Repeated draw.
 		Timeline timeline = new Timeline();
@@ -220,9 +223,10 @@ public class Main extends Application {
 
 		stage.setOnCloseRequest((WindowEvent w) -> {
 			timeline.stop();
-			makerThread.interrupt();
+			trainerThread.interrupt();
 		});
 
+		//try { trainerThread.join(); } catch(InterruptedException ie) {}
 		System.out.println("Done.");
 	}
 
