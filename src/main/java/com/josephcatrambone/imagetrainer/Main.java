@@ -99,11 +99,13 @@ public class Main extends Application {
 		ContrastiveDivergenceTrainer trainer0_0 = new ContrastiveDivergenceTrainer();
 		trainer0_0.batchSize = 10;
 		trainer0_0.earlyStopError = -1;
-		trainer0_0.learningRate = 0.1;
+		trainer0_0.learningRate = 0.2;
 		trainer0_0.maxIterations = 1001;
 		trainer0_0.notificationIncrement = 1000;
 		ConvolutionalTrainer trainer0_1 = new ConvolutionalTrainer();
 		trainer0_1.operatorTrainer = trainer0_0;
+		trainer0_1.subwindowsPerExample = 500;
+		trainer0_1.examplesPerBatch = 10;
 		trainer0_1.maxIterations = 10000;
 		dnt.setTrainer(0, trainer0_1); // Train layer zero convolution with ct.
 
@@ -158,9 +160,16 @@ public class Main extends Application {
 		Matrix examples = Matrix.zeros(1, IMAGE_WIDTH * IMAGE_HEIGHT);
 		try {
 			Files.list(new File(IMAGE_PATH).toPath())
-					.filter(p -> p.getFileName().endsWith(IMAGE_EXTENSION) && !p.getFileName().startsWith("."))
-					.limit(IMAGE_LIMIT)
-					.forEach(p -> examples.appendRow(ImageTools.imageFileToMatrix(p.getFileName().toString(), IMAGE_WIDTH, IMAGE_HEIGHT).reshape_i(1, IMAGE_WIDTH*IMAGE_HEIGHT).getRowArray(0)));
+					.filter(p -> p.getFileName().toString().toLowerCase().endsWith(IMAGE_EXTENSION))
+					//.limit(IMAGE_LIMIT)
+					.forEach(p -> {
+						String path = p.getFileName().toAbsolutePath().toString().replace("\\", "\\\\"); // For windows.
+						Matrix m = ImageTools.imageFileToMatrix(path, IMAGE_WIDTH, IMAGE_HEIGHT);
+						if(m != null) {
+							examples.appendRow(m.reshape_i(1, IMAGE_WIDTH * IMAGE_HEIGHT).getRowArray(0));
+						}
+						System.out.println(p.getFileName().toString());
+					});
 		} catch(IOException ioe) {
 
 		}
@@ -192,7 +201,7 @@ public class Main extends Application {
 			NetworkIOTools.saveNetworkToDisk(net, FINAL_NETWORK_FILENAME);
 			System.out.println("Done with all the things.  Closing thread.");
 		});
-		//trainerThread.start();
+		trainerThread.start();
 
 		Runnable makerThread = () -> {
 			String filename = "output_"+ System.nanoTime() +".png";
